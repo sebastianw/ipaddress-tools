@@ -1,0 +1,19 @@
+root = true
+
+# Unix-style newlines
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+
+
+[{**.yml,**.yaml}]
+indent_size = 2
+indent_style = space
+trim_trailing_whitespace = true
+
+[**.py]
+indent_size = 4
+indent_style = space
+trim_trailing_whitespace = true
+max_line_length = 120
