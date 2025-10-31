@@ -8,10 +8,10 @@ _N = TypeVar("_N", ipaddress.IPv4Network, ipaddress.IPv6Network)
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
-    from typing import TypeAlias
+    from typing import TypeAlias, TypeGuard
 
     IPNetwork: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
-    UnspecifiedNetwork: TypeAlias = str | _N
+    UnspecifiedNetwork: TypeAlias = str | IPNetwork
     UnspecifiedNetworkSeq: TypeAlias = Sequence[UnspecifiedNetwork]
 
 
@@ -29,35 +29,47 @@ def ip_set(address: UnspecifiedNetwork, used_networks: UnspecifiedNetworkSeq | N
     raise ValueError(msg)
 
 
+def overlap(a: tuple[int, int], b: list[tuple[int, int]]):
+    for x in b:
+        if x[0] <= a[0] <= x[1] or x[0] <= a[1] <= x[1] or a[0] <= x[0] <= a[1] or a[0] <= x[1] <= a[1]:
+            return x
+    return False
+
+
+def net_size_iterator(start: IPNetwork, cidr: int) -> Generator[tuple[int, int], None, None]:
+    cidr_size = 2 ** (start.max_prefixlen - cidr)
+    for s in range(int(start[0]), int(start[-1]), cidr_size):
+        yield s, s + cidr_size - 1
+
+
 class _BaseIPSet(Generic[_N]):
     version: int | None = None
     max_prefixlen: int = 0
 
     def __init__(self, supernet: UnspecifiedNetwork, used_networks: UnspecifiedNetworkSeq | None = None):
-        _supernet = ipaddress.ip_network(supernet) if isinstance(supernet, str) else supernet
-        if _supernet.version != self.version:
-            msg = f"IP Version missmatch. Cannot create {self.__class__.__name__} from {supernet.__class__.__name__}"
-            raise ValueError(msg)
-        self.supernet = _supernet
+        self.lock = RLock()
+        self.supernet: _N = self._normalize_network(supernet)
         if used_networks is None:
             used_networks = []
-        self._used_networks: set[_N] = self._init_used_networks(used_networks)
-        self.lock = RLock()
-        self._free_networks: set[_N] = set()
-        self._update_free_networks()
+        self._used_networks: list[_N] = [self._normalize_network(n) for n in used_networks]
+        self._used_network_map: dict[tuple[int, int], _N] = {}
+        self._update_networks()
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self.supernet}>"
 
-    def _validate_network(self, input_network: UnspecifiedNetwork) -> _N:
-        network = ipaddress.ip_network(input_network) if isinstance(input_network, str) else input_network
-        if network.version != self.version:
+    def _normalize_network(self, _network: UnspecifiedNetwork) -> _N:
+        network = ipaddress.ip_network(_network) if isinstance(_network, str) else _network
+        if not self._version_compatible(network):
             msg = f"IP Version missmatch. Cannot use {network} in {self}"
             raise ValueError(msg)
         return network
 
+    def _version_compatible(self, network: IPNetwork) -> TypeGuard[_N]:
+        return self.version == network.version
+
     def _init_used_networks(self, input_networks: UnspecifiedNetworkSeq) -> set[_N]:
-        return {self._validate_network(n) for n in input_networks}
+        return {self._normalize_network(n) for n in input_networks}
 
     @property
     def used_networks(self) -> Generator[IPNetwork, None, None]:
@@ -71,24 +83,18 @@ class _BaseIPSet(Generic[_N]):
     def add_used_networks(self, input_networks: UnspecifiedNetworkSeq) -> None:
         with self.lock:
             self._used_networks.update(self._init_used_networks(input_networks))
+            self._update_free_networks()
 
-    def _update_free_networks(self) -> None:
-        new_free_nets: list[IPNetwork] = []
-        for used_network in self._used_networks:
-            for free_net in self._free_networks:
-                if used_network.subnet_of(free_net):
-                    new_free_nets.extend(free_net.address_exclude(used_network))
-                else:
-                    new_free_nets.append(free_net)
-            self._free_networks = new_free_nets
+    def _update_networks(self) -> None:
+        self._used_network_map = {(int(n[0]), int(n[-1])): n for n in self._used_networks}
 
     def get_free_networks(self, prefixlen: int) -> Generator[_N, None, None]:
-        for free_network in sorted(self._free_networks):
-            if free_network.prefixlen == prefixlen:
-                yield free_network
-            elif free_network.prefixlen < prefixlen:
-                # Splitting into subnets
-                yield from free_network.subnets(new_prefix=prefixlen)
+        for n in net_size_iterator(self.supernet, prefixlen):
+            o = overlap(n, self._used_network_map.keys())
+            if o:
+                # print(f"{ipaddress.ip_network((n[0], prefixlen))} overlaps with {self._used_network_map[o]}")
+                continue
+            yield ipaddress.ip_network((n[0], prefixlen))
 
 
 class IPv4Set(_BaseIPSet[ipaddress.IPv4Network]):
