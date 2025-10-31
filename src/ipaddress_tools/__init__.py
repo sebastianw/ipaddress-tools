@@ -1,5 +1,4 @@
 from __future__ import annotations
 
-
-def hello() -> str:
-    return "Hello from ipaddress-tools!"
+from ._version import __version__, __version_tuple__
+from .tools import IPv4Set, IPv6Set, ip_set

@@ -28,6 +28,7 @@ dependencies = [  ]
 [dependency-groups]
 dev = [
     "mypy>=1.18.2",
+    "pytest>=8.4.2",
 ]
 
 [tool.hatch.version]
@@ -49,7 +50,6 @@ explicit = true
 
 [tool.ruff]
 line-length = 120
-
 extend-exclude = [ "src/*/_version.py" ]
 
 lint.extend-select = [
@@ -110,13 +110,15 @@ max_supported_python = "3.14"
 column_width = 120
 indent = 4
 
+[tool.pytest.ini_options]
+addopts = "--color=yes"
+testpaths = [ "tests" ]
+
 [tool.mypy]
 disallow_untyped_defs = true
 pretty = true
 show_error_codes = true
-exclude = [
-    '^src/[^/]+/_version\.py$',
-]
+exclude = [ '^src/[^/]+/_version\.py$' ]
 
 [[tool.mypy.overrides]]
 module = [ 'ansible.*' ]
